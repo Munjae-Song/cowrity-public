@@ -4,21 +4,42 @@ import threading
 import time
 import requests
 import json
+import os
+import re
+from dotenv import load_dotenv
 import anthropic # Anthropic API를 사용하기 위한 패키지
 from google import genai # Google Gemini API를 사용하기 위한 패키지
 from google.genai import types # Google Gemini API를 사용하기 위한 패키지
 from openai import OpenAI # OpenAI API를 사용하기 위한 패키지
+from datetime import datetime
 
+# profile.env 파일 로드
+load_dotenv('profile.env')
 
-# 글로벌 API 키 설정
-# 각 LLM에 사용하는 API-Key를 등록
-CLAUDE_API_KEY = "Claude API-Key"
-PERPLEXITY_API_KEY = "Perplexity API-Key"
-GEMINI_API_KEY = "Gemini API-Key"
-OPENAI_API_KEY = "OepnAI API-Key"  
+# 글로벌 API 키 설정 (profile.env 파일에서 읽어오기)
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NOTION_API_KEY = os.getenv("NOTION_API_KEY")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+
+# API 키 검증
+if not all([CLAUDE_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY]):
+    missing_keys = []
+    if not CLAUDE_API_KEY:
+        missing_keys.append("CLAUDE_API_KEY")
+    if not PERPLEXITY_API_KEY:
+        missing_keys.append("PERPLEXITY_API_KEY")
+    if not GEMINI_API_KEY:
+        missing_keys.append("GEMINI_API_KEY")
+    if not OPENAI_API_KEY:
+        missing_keys.append("OPENAI_API_KEY")
+    
+    print(f"경고: profile.env 파일에 다음 API 키가 누락되었습니다: {', '.join(missing_keys)}")
+    print("프로그램을 종료합니다. profile.env 파일에 모든 API 키를 설정해주세요.")
 
 # 글로벌 시스템 프롬프트 설정
-# 각 요청에 따라 입력 되는 시스템 프롬프트.
 SYSTEM_PROMPTS = {
     "request": """당신은 요청을 처리하는 AI 어시스턴트입니다. 주어진 요청에 대해 정확하고 신속하게 답변할 것. 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것.
                   문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
@@ -67,7 +88,7 @@ class CowrityApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Cowrity Ver. 0.1 - FactoryStat")
-        self.root.geometry("1350x800+5+5")  # 윈도우 크기와 위치 (width x height + x + y)
+        self.root.geometry("1350x750+5+5")  # 윈도우 크기와 위치 (width x height + x + y)
         self.root.configure(bg='#f0f0f0')
         
         # 이전 내용 요약 저장 변수
@@ -323,6 +344,15 @@ class CowrityApp:
         )
         self.clear_output_btn.pack(side=tk.LEFT, padx=5)
         
+        # 노션 업로드 버튼
+        self.notion_upload_btn = ttk.Button(
+            bottom_frame,
+            text="노션 업로드",
+            command=self.upload_to_notion,
+            state=tk.DISABLED
+        )
+        self.notion_upload_btn.pack(side=tk.LEFT, padx=5)
+        
         # 클립보드 복사 버튼 (수동 복사용)
         self.copy_response_2input_btn = ttk.Button(
             bottom_frame,
@@ -336,9 +366,6 @@ class CowrityApp:
         self.status_label = ttk.Label(bottom_frame, text="준비", foreground="green")
         self.status_label.pack(side=tk.LEFT, padx=20)
         
-        # 이전 요약 상태 표시
-        self.summary_status_label = ttk.Label(bottom_frame, text="이전요약: 없음", foreground="gray")
-        self.summary_status_label.pack(side=tk.LEFT, padx=10)
         # 프로그레스 바
         self.progress = ttk.Progressbar(
             bottom_frame,
@@ -394,14 +421,14 @@ class CowrityApp:
         self.output_text.configure(state=tk.NORMAL)
         self.output_text.delete(1.0, tk.END)
         self.output_text.configure(state=tk.DISABLED)
-        # 클립보드 버튼 비활성화
+        # 클립보드 버튼과 노션 업로드 버튼 비활성화
         self.copy_response_2input_btn.configure(state=tk.DISABLED)
+        self.notion_upload_btn.configure(state=tk.DISABLED)
         self.last_response = ""
     
     def clear_previous_summary(self):
         """이전 내용 요약 초기화"""
         self.previous_summary = ""
-        self.summary_status_label.configure(text="이전요약: 없음", foreground="gray")
         messagebox.showinfo("초기화 완료", "이전 내용 요약이 초기화되었습니다.")
     
     def copy_to_clipboard(self):
@@ -423,6 +450,242 @@ class CowrityApp:
                 messagebox.showwarning("복사 실패", "복사할 응답이 없습니다.")
         except Exception as e:
             messagebox.showerror("오류", f"클립보드 복사 중 오류가 발생했습니다: {str(e)}")
+    
+    def upload_to_notion(self):
+        """클립보드의 내용을 노션에 업로드"""
+        try:
+            # 클립보드에서 내용 가져오기
+            clipboard_content = self.root.clipboard_get()
+            
+            if not clipboard_content or clipboard_content.strip() == "":
+                messagebox.showwarning("업로드 실패", "클립보드에 업로드할 내용이 없습니다.")
+                return
+            
+            # 노션 API 키 확인
+            if not NOTION_API_KEY or not NOTION_DATABASE_ID:
+                messagebox.showerror("설정 오류", "노션 API 키 또는 데이터베이스 ID가 설정되지 않았습니다.\nprofile.env 파일에 NOTION_API_KEY와 NOTION_DATABASE_ID를 설정해주세요.")
+                return
+            
+            # 백그라운드에서 업로드 처리
+            self.update_status("노션에 업로드 중...", "orange", True)
+            
+            thread = threading.Thread(
+                target=self._upload_to_notion_background,
+                args=(clipboard_content,)
+            )
+            thread.daemon = True
+            thread.start()
+            
+        except tk.TclError:
+            messagebox.showwarning("업로드 실패", "클립보드에 내용이 없습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"노션 업로드 중 오류가 발생했습니다: {str(e)}")
+    
+    def _upload_to_notion_background(self, content):
+        """백그라운드에서 노션 업로드 처리"""
+        try:
+            # 노션 API 호출
+            success = self._create_notion_page(content)
+            
+            if success:
+                self.root.after(0, lambda: self.update_status("노션 업로드 완료", "green", False))
+                self.root.after(0, lambda: messagebox.showinfo("업로드 완료", "노션에 성공적으로 업로드되었습니다."))
+                # 3초 후 상태를 다시 "준비"로 변경
+                self.root.after(3000, lambda: self.update_status("준비", "green", False))
+            else:
+                self.root.after(0, lambda: self.update_status("노션 업로드 실패", "red", False))
+                self.root.after(0, lambda: messagebox.showerror("업로드 실패", "노션 업로드에 실패했습니다.\n\n가능한 원인:\n1. 노션 API 키가 올바르지 않음\n2. 데이터베이스 ID가 올바르지 않음\n3. Integration이 데이터베이스에 연결되지 않음\n4. 네트워크 연결 문제\n\n콘솔에서 자세한 오류 정보를 확인하세요."))
+                # 3초 후 상태를 다시 "준비"로 변경
+                self.root.after(3000, lambda: self.update_status("준비", "green", False))
+                
+        except Exception as e:
+            error_msg = f"노션 업로드 중 오류가 발생했습니다: {str(e)}"
+            self.root.after(0, lambda: self.update_status("노션 업로드 실패", "red", False))
+            self.root.after(0, lambda: messagebox.showerror("업로드 오류", error_msg))
+            # 3초 후 상태를 다시 "준비"로 변경
+            self.root.after(3000, lambda: self.update_status("준비", "green", False))
+    
+    def _extract_summary_for_title(self, content):
+        """AI 답변에서 요약 부분을 추출하여 제목으로 사용"""
+        try:
+            # ##### 뒤의 요약 부분을 찾기
+            if "#####" in content:
+                summary_part = content.split("#####", 1)[1].strip()
+                
+                # 요약 부분이 비어있지 않고 적절한 길이라면 사용
+                if summary_part and len(summary_part) <= 100:
+                    # 줄바꿈 제거하고 한 줄로 만들기
+                    summary_title = summary_part.replace("\n", " ").strip()
+                    return summary_title
+                    
+            # **요약** 또는 **요약:** 패턴 찾기
+            import re
+            summary_patterns = [
+                r'\*\*요약\*\*\s*:?\s*(.+?)(?=\n\n|\n\*\*|\Z)',
+                r'\*\*요약:\*\*\s*(.+?)(?=\n\n|\n\*\*|\Z)',
+                r'요약\s*:?\s*(.+?)(?=\n\n|\n\*\*|\Z)'
+            ]
+            
+            for pattern in summary_patterns:
+                match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    summary_text = match.group(1).strip()
+                    # 줄바꿈 제거하고 한 줄로 만들기
+                    summary_title = summary_text.replace("\n", " ").strip()
+                    # 제목 길이 제한 (100자)
+                    if len(summary_title) > 100:
+                        summary_title = summary_title[:97] + "..."
+                    return summary_title
+            
+            return None
+            
+        except Exception as e:
+            print(f"요약 추출 오류: {str(e)}")
+            return None
+    
+    def _create_notion_page(self, content):
+        """노션 페이지 생성"""
+        try:
+            # 노션 API 헤더
+            headers = {
+                "Authorization": f"Bearer {NOTION_API_KEY}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28"
+            }
+            
+            # AI 답변에서 요약 부분을 제목으로 추출
+            summary_title = self._extract_summary_for_title(content)
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 요약이 있으면 "요약 - 날짜" 형태로, 없으면 기본 제목 사용
+            if summary_title:
+                title = f"{summary_title} - {current_time}"
+            else:
+                title = f"Cowrity 응답 - {current_time}"
+            
+            # 전체 내용을 details 블록에 넣기
+            content_blocks = []
+            
+            # 내용을 2000자씩 분할하여 텍스트 블록 생성
+            max_length = 2000
+            
+            # 먼저 toggle 블록 생성 (children 없이)
+            content_blocks.append({
+                "object": "block",
+                "type": "toggle",
+                "toggle": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": "AI 답변 전체 내용"
+                            }
+                        }
+                    ]
+                }
+            })
+            
+            # 내용을 분할하여 일반 paragraph 블록들 추가
+            for i in range(0, len(content), max_length):
+                chunk = content[i:i+max_length]
+                content_blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {
+                                    "content": chunk
+                                }
+                            }
+                        ]
+                    }
+                })
+            
+            # 먼저 데이터베이스 정보를 가져와서 제목 속성 확인
+            database_info = self._get_database_info()
+            if not database_info:
+                return False
+                
+            # 제목 속성 찾기
+            title_property = None
+            for prop_name, prop_info in database_info.get("properties", {}).items():
+                if prop_info.get("type") == "title":
+                    title_property = prop_name
+                    break
+            
+            if not title_property:
+                print("데이터베이스에 제목 속성을 찾을 수 없습니다.")
+                return False
+            
+            # 노션 페이지 생성 데이터 (동적 제목 속성 사용)
+            page_data = {
+                "parent": {
+                    "database_id": NOTION_DATABASE_ID
+                },
+                "properties": {
+                    title_property: {
+                        "title": [
+                            {
+                                "text": {
+                                    "content": title
+                                }
+                            }
+                        ]
+                    }
+                },
+                "children": content_blocks
+            }
+            
+            # 노션 API 호출
+            response = requests.post(
+                "https://api.notion.com/v1/pages",
+                headers=headers,
+                json=page_data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                return True
+            else:
+                print(f"노션 API 오류: {response.status_code} - {response.text}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            print("노션 API 타임아웃")
+            return False
+        except requests.exceptions.ConnectionError:
+            print("노션 API 연결 오류")
+            return False
+        except Exception as e:
+            print(f"노션 페이지 생성 오류: {str(e)}")
+            return False
+    
+    def _get_database_info(self):
+        """노션 데이터베이스 정보 가져오기"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {NOTION_API_KEY}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28"
+            }
+            
+            response = requests.get(
+                f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}",
+                headers=headers,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"데이터베이스 정보 가져오기 오류: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"데이터베이스 정보 가져오기 예외: {str(e)}")
+            return None
     
     def auto_copy_to_clipboard(self, text):
         """Claude 응답을 자동으로 클립보드에 복사"""
@@ -525,54 +788,62 @@ class CowrityApp:
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
                 
-                # 성공적인 응답이면 클립보드 버튼 활성화
+                # 성공적인 응답이면 클립보드 버튼과 노션 업로드 버튼 활성화
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "Claude Opus4(정교함/비쌈)":
                 response = self.claude_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
                 
-                # 성공적인 응답이면 클립보드 버튼 활성화
+                # 성공적인 응답이면 클립보드 버튼과 노션 업로드 버튼 활성화
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "Claude Haiku 3.5(단순,저가)":
                 response = self.claude_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
-                # 성공적인 응답이면 클립보드 버튼 활성화
+                # 성공적인 응답이면 클립보드 버튼과 노션 업로드 버튼 활성화
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "Perplexity Sonar(일반)":
                 response = self.perplexity_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
                 if response != "":
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "Perplexity Sonar Pro(정교함, 비쌈)":
                 response = self.perplexity_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
                 if response != "":
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "Gemini 2.5 Flash(일반)":
                 response = self.gemini_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
-                #response가 비어 있지 않으면  클립보드 버튼 활성화
+                #response가 비어 있지 않으면 클립보드 버튼과 노션 업로드 버튼 활성화
                 if response != "":
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
                 
             elif model_name == "Gemini 2.5 Pro(정교함, 비쌈)":
                 response = self.gemini_api(prompt, task_type, model_name, selected_purpose)
                 is_error = response.startswith("❌")
                 if response != "":
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
             elif model_name == "GPT-4.1(일반)":
                 response = self.openai_api(prompt, task_type, model_name, selected_purpose)
                 is_error = response.startswith("❌")
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
                 # 오류 응답인지 확인
                #
             elif model_name == "OpenAI o3(추론모델)":
@@ -580,6 +851,7 @@ class CowrityApp:
                 is_error = response.startswith("❌")
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
+                    self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
                 # 오류 응답인지 확인
                 #
             else:
@@ -675,11 +947,6 @@ class CowrityApp:
             if "#####" in full_response:
                 summary_part = full_response.split("#####", 1)[1].strip()
                 self.previous_summary = summary_part
-                # UI에서 요약 상태 업데이트
-                self.root.after(0, lambda: self.summary_status_label.configure(
-                    text=f"이전요약: {summary_part[:30]}{'...' if len(summary_part) > 30 else ''}", 
-                    foreground="blue"
-                ))
             
             # 클립보드용 응답 저장 (순수 텍스트만)
             self.last_response = full_response
@@ -936,7 +1203,11 @@ class CowrityApp:
             return success_message
         
         except genai.exceptions.ApiError as e:
-            return error_msg    
+            error_msg = f"❌ Gemini API 오류: {str(e)}"
+            return error_msg
+        except Exception as e:
+            error_msg = f"❌ 예상치 못한 오류가 발생했습니다: {str(e)}"
+            return error_msg
         
     def openai_api(self, prompt, task_type="request", model_name="GPT-4.1(일반)", purpose_prompt=PURPOSE_PROMPTS["writer"]):
         """OpenAI API 호출 함수"""
@@ -1124,9 +1395,8 @@ class CowrityApp:
         • Claude, Perplexity, Gemini 등 다양한 AI 모델 지원
         • 문장 다듬기 및 팩트 체크 기능
         • 사용자 목적별 맞춤형 토론 및 분석
+        • 실시간 스트리밍 응답
         • 자동 클립보드 복사 기능
-
-        연락처 : info@factorystat.com
 
         """
         
