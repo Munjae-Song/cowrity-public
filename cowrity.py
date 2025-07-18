@@ -13,7 +13,7 @@ from google.genai import types # Google Gemini API를 사용하기 위한 패키
 from openai import OpenAI # OpenAI API를 사용하기 위한 패키지
 from datetime import datetime
 
-# profile.env 파일 로드
+# profile.env 파일 로드 
 load_dotenv('profile.env')
 
 # 글로벌 API 키 설정 (profile.env 파일에서 읽어오기)
@@ -116,7 +116,7 @@ class CowrityApp:
         model_frame.columnconfigure(3, weight=1)  # 목적 설정 콤보박스를 위한 컬럼 추가
         
         # 언어 모델 옵션
-        model_options = ["Claude Sonnet 4(일반)","Claude Opus4(정교함/비쌈)","Claude Haiku 3.5(단순,저가)","Perplexity Sonar(일반)", "Perplexity Sonar Pro(정교함, 비쌈)", "Gemini 2.5 Flash(일반)", "Gemini 2.5 Pro(정교함, 비쌈)", "GPT-4.1(일반)", "OpenAI o3(추론모델)"]
+        model_options = ["Claude Sonnet 4(일반)","Claude Opus 4(정교함/비쌈)","Claude Haiku 3.5(단순,저가)","Perplexity Sonar(일반)", "Perplexity Sonar Pro(정교함, 비쌈)", "Gemini 2.5 Flash(일반)", "Gemini 2.5 Pro(정교함, 비쌈)", "GPT-4.1(일반)", "OpenAI o3(추론모델)"]
         
         # 1차 언어모델 선택
         ttk.Label(model_frame, text="1차 언어모델:").grid(row=0, column=0, sticky=tk.W, padx=80)
@@ -792,7 +792,7 @@ class CowrityApp:
                 if not is_error:
                     self.root.after(0, lambda: self.copy_response_2input_btn.configure(state=tk.NORMAL))
                     self.root.after(0, lambda: self.notion_upload_btn.configure(state=tk.NORMAL))
-            elif model_name == "Claude Opus4(정교함/비쌈)":
+            elif model_name == "Claude Opus 4(정교함/비쌈)":
                 response = self.claude_api(prompt, task_type, model_name, selected_purpose)
                 # 오류 응답인지 확인
                 is_error = response.startswith("❌")
@@ -877,7 +877,7 @@ class CowrityApp:
 
             #모델 이름에 따라서 모델을 선택한다.
             if model_name == "Claude Opus 4(정교함/비쌈)":
-                model_selected = "claude-opus-4-0" 
+                model_selected = "claude-opus-4-20250514" 
                 max_tokens_4this = 20000
             elif model_name == "Claude Sonnet 4(일반)":
                 model_selected = "claude-sonnet-4-0"
