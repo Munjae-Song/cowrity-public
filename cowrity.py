@@ -1,3 +1,4 @@
+#2025.07.22
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
@@ -39,49 +40,22 @@ if not all([CLAUDE_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY])
     print(f"경고: profile.env 파일에 다음 API 키가 누락되었습니다: {', '.join(missing_keys)}")
     print("프로그램을 종료합니다. profile.env 파일에 모든 API 키를 설정해주세요.")
 
-# 글로벌 시스템 프롬프트 설정
+# 글로벌 시스템 프롬프트 설정 (profile.env에서 읽어오기)
 SYSTEM_PROMPTS = {
-    "request": """당신은 요청을 처리하는 AI 어시스턴트입니다. 주어진 요청에 대해 정확하고 신속하게 답변할 것. 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것.
-                  문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                  답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘.""",
-    "direct": """당신은 전문 전공 서적 수준의 답을 하는 AI 어시스턴트입니다. 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것. 
-                 문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                 답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘.""",
-    "refine": """당신은 전문 편집자입니다. 주어진 텍스트를 더 자연스럽고 읽기 쉽게 다듬을 것. 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것. 
-                 문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                 답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘.""",
-    "fact_check": """당신은 팩트체커입니다. 주어진 텍스트의 사실 관계를 검증하고 잘못된 정보가 있다면 정확한 정보로 수정할 것. 
-                    영어질문에는 영어로, 한국어 질문에는 한국어로 답할것. 문체는 하다.이다 체로 작성. 
-                    일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                    팩트 체크는 다음과 같이 할 것
-                    1. 사실인지 확인
-                    2. 잘못된 정보가 있다면 정확한 정보로 수정
-                    3. 가능한 한 출처나 근거 제시
-                    4. 검증 불가능한 내용은 명시
-                    답변 형식은 다음 3가지로 할 것 ✅ 사실 확인된 내용 ❌ 잘못된 정보 (정정: 올바른 정보) ⚠️ 검증 불가능하거나 주의 필요한 내용.
-                    출처는 링크를 제시할 것.
-                    답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘.""",
-    "refine_fact": """당신은 전문 편집자이자 팩트체커입니다. 주어진 텍스트를 더 자연스럽고 읽기 쉽게 다듬고 사실 관계도 검증할 것. 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것. 
-                    문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                    팩트 체크는 다음과 같이 할 것
-                    1. 사실인지 확인
-                    2. 잘못된 정보가 있다면 정확한 정보로 수정
-                    3. 가능한 한 출처나 근거 제시
-                    4. 검증 불가능한 내용은 명시
-                    답변 형식은 다음 3가지로 할 것 ✅ 사실 확인된 내용 ❌ 잘못된 정보 (정정: 올바른 정보) ⚠️ 검증 불가능하거나 주의 필요한 내용.
-                    출처는 링크를 제시할 것.
-                    답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘.""",
-    "debate": """당신은 비판적으로 분석하는 토론 전문가입니다. 주어진 텍스트에 대해 논리적 모순이나 비약 등을 지적하고 다양한 시각으로 토론하고 건설적인 의견을 제시할 것. 
-                 영어질문에는 영어로, 한국어 질문에는 한국어로 답할것. 문체는 하다.이다 체로 작성. 일본어 번역체나 영어 번역체는 사용하지 말고 맞춤법을 지킬것. 
-                 답변 마지막에는 ##### 표시를 하고 질문과 답변을 50단어로 요약해줘."""
+    "request": os.getenv("SYSTEM_PROMPT_REQUEST", "당신은 요청을 처리하는 AI 어시스턴트입니다."),
+    "direct": os.getenv("SYSTEM_PROMPT_DIRECT", "당신은 전문 전공 서적 수준의 답을 하는 AI 어시스턴트입니다."),
+    "refine": os.getenv("SYSTEM_PROMPT_REFINE", "당신은 전문 편집자입니다."),
+    "fact_check": os.getenv("SYSTEM_PROMPT_FACT_CHECK", "당신은 팩트체커입니다."),
+    "refine_fact": os.getenv("SYSTEM_PROMPT_REFINE_FACT", "당신은 전문 편집자이자 팩트체커입니다."),
+    "debate": os.getenv("SYSTEM_PROMPT_DEBATE", "당신은 비판적으로 분석하는 토론 전문가입니다.")
 }
 
-# 사용자 목적별 프롬프트 설정
+# 사용자 목적별 프롬프트 설정 (profile.env에서 읽어오기)
 PURPOSE_PROMPTS = {
-    "writer": "작가의 관점에서 정돈 된 문장과 서사 구조를 중심으로 글을 작성한다.",
-    "student": "학생의 관점에서 학술적인 접근을 기본으로, 개념을 명확히 하고 교육적 가치 중심으로 보고서를 작성한다.",
-    "reporter": "기자의 관점에서 사실 확인과 객관적 분석에 중점을 두며, 뉴스 가치와 사회적 영향을 고려한 기사를 작성한다.",
-    "officeworker": "회사원의 관점에서 실무적이고 효율적인 접근을 하며, 비즈니스 활용도와 실용성에 중점을 둔 보고서를 작성한다."
+    "writer": os.getenv("PURPOSE_PROMPT_WRITER", "작가의 관점에서 정돈 된 문장과 서사 구조를 중심으로 글을 작성한다."),
+    "student": os.getenv("PURPOSE_PROMPT_STUDENT", "학생의 관점에서 학술적인 접근을 기본으로, 개념을 명확히 하고 교육적 가치 중심으로 보고서를 작성한다."),
+    "reporter": os.getenv("PURPOSE_PROMPT_REPORTER", "기자의 관점에서 사실 확인과 객관적 분석에 중점을 두며, 뉴스 가치와 사회적 영향을 고려한 기사를 작성한다."),
+    "officeworker": os.getenv("PURPOSE_PROMPT_OFFICEWORKER", "회사원의 관점에서 실무적이고 효율적인 접근을 하며, 비즈니스 활용도와 실용성에 중점을 둔 보고서를 작성한다.")
 }
 
 class CowrityApp:
@@ -193,33 +167,55 @@ class CowrityApp:
         left_button_frame = ttk.LabelFrame(button_frame, text="언어모델 1", padding="5")
         left_button_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5)
         
+        # 첫 번째 행 (4개 버튼)
+        left_row1_frame = ttk.Frame(left_button_frame)
+        left_row1_frame.pack(fill=tk.X, pady=2)
+        
         self.send_model1_btn = ttk.Button(
-            left_button_frame,
+            left_row1_frame,
             text="프롬프트 전송",
             command=lambda: self.send_to_model(1, "request")
         )
-        self.send_model1_btn.pack(side=tk.LEFT, padx=5)
+        self.send_model1_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.refine_model1_btn = ttk.Button(
+            left_row1_frame,
+            text="문장 다듬기",
+            command=lambda: self.process_with_model(1, "refine")
+        )
+        self.refine_model1_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.fact_check_model1_btn = ttk.Button(
+            left_row1_frame,
+            text="팩트 체크",
+            command=lambda: self.process_with_model(1, "fact_check")
+        )
+        self.fact_check_model1_btn.pack(side=tk.LEFT, padx=2)
         
         self.discuss_model1_btn = ttk.Button(
-            left_button_frame,
+            left_row1_frame,
             text="토론",
             command=lambda: self.process_with_model(1, "debate")
         )
-        self.discuss_model1_btn.pack(side=tk.LEFT, padx=5)
+        self.discuss_model1_btn.pack(side=tk.LEFT, padx=2)
+        
+        # 두 번째 행 (2개 버튼)
+        left_row2_frame = ttk.Frame(left_button_frame)
+        left_row2_frame.pack(fill=tk.X, pady=2)
         
         self.clear_input_btn = ttk.Button(
-            left_button_frame,
+            left_row2_frame,
             text="입력 클리어",
             command=self.clear_input
         )
-        self.clear_input_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_input_btn.pack(side=tk.LEFT, padx=2)
         
         self.clear_summary_btn = ttk.Button(
-            left_button_frame,
+            left_row2_frame,
             text="이전요약 초기화",
             command=self.clear_previous_summary
         )
-        self.clear_summary_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_summary_btn.pack(side=tk.LEFT, padx=2)
         
         # 중간 영역: 언어모델 2 버튼들
         middle_button_frame = ttk.LabelFrame(button_frame, text="언어모델 2", padding="5")
