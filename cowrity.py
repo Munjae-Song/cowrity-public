@@ -1,18 +1,21 @@
 #2025.07.22
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, font
 import threading
 import time
 import requests
 import json
 import os
 import re
+import webbrowser
 from dotenv import load_dotenv
 import anthropic # Anthropic API를 사용하기 위한 패키지
 from google import genai # Google Gemini API를 사용하기 위한 패키지
 from google.genai import types # Google Gemini API를 사용하기 위한 패키지
 from openai import OpenAI # OpenAI API를 사용하기 위한 패키지
 from datetime import datetime
+# 필요한 패키지 설치
+
 
 # profile.env 파일 로드 
 load_dotenv('profile.env')
@@ -40,22 +43,74 @@ if not all([CLAUDE_API_KEY, PERPLEXITY_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY])
     print(f"경고: profile.env 파일에 다음 API 키가 누락되었습니다: {', '.join(missing_keys)}")
     print("프로그램을 종료합니다. profile.env 파일에 모든 API 키를 설정해주세요.")
 
-# 글로벌 시스템 프롬프트 설정 (profile.env에서 읽어오기)
+
+def load_prompts_from_md(file_path='prompt.md'):
+    """prompt.md 파일에서 프롬프트를 읽어와서 딕셔너리로 반환"""
+    system_prompts = {}
+    purpose_prompts = {}
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        
+        # 시스템 프롬프트 파싱
+        system_sections = {
+            'request': 'REQUEST',
+            'direct': 'DIRECT', 
+            'refine': 'REFINE',
+            'fact_check': 'FACT_CHECK',
+            'refine_fact': 'REFINE_FACT',
+            'debate': 'DEBATE'
+        }
+        
+        for key, section in system_sections.items():
+            pattern = rf"### {section}\n(.*?)(?=\n### |\n## |\Z)"
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                system_prompts[key] = match.group(1).strip()
+        
+        # 목적별 프롬프트 파싱
+        purpose_sections = {
+            'writer': 'WRITER',
+            'student': 'STUDENT',
+            'reporter': 'REPORTER', 
+            'officeworker': 'OFFICEWORKER'
+        }
+        
+        for key, section in purpose_sections.items():
+            pattern = rf"### {section}\n(.*?)(?=\n### |\n## |\Z)"
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                purpose_prompts[key] = match.group(1).strip()
+                
+    except FileNotFoundError:
+        print(f"경고: {file_path} 파일을 찾을 수 없습니다. 기본 프롬프트를 사용합니다.")
+    except Exception as e:
+        print(f"경고: 프롬프트 파일 읽기 오류: {str(e)}. 기본 프롬프트를 사용합니다.")
+    
+    return system_prompts, purpose_prompts
+
+# prompt.md에서 프롬프트 로드
+loaded_system_prompts, loaded_purpose_prompts = load_prompts_from_md()
+
+
+
+# 글로벌 시스템 프롬프트 설정 (prompt.md에서 읽어오기, 없으면 기본값 사용)
 SYSTEM_PROMPTS = {
-    "request": os.getenv("SYSTEM_PROMPT_REQUEST", "당신은 요청을 처리하는 AI 어시스턴트입니다."),
-    "direct": os.getenv("SYSTEM_PROMPT_DIRECT", "당신은 전문 전공 서적 수준의 답을 하는 AI 어시스턴트입니다."),
-    "refine": os.getenv("SYSTEM_PROMPT_REFINE", "당신은 전문 편집자입니다."),
-    "fact_check": os.getenv("SYSTEM_PROMPT_FACT_CHECK", "당신은 팩트체커입니다."),
-    "refine_fact": os.getenv("SYSTEM_PROMPT_REFINE_FACT", "당신은 전문 편집자이자 팩트체커입니다."),
-    "debate": os.getenv("SYSTEM_PROMPT_DEBATE", "당신은 비판적으로 분석하는 토론 전문가입니다.")
+    "request": loaded_system_prompts.get("request", "당신은 요청을 처리하는 AI 어시스턴트입니다."),
+    "direct": loaded_system_prompts.get("direct", "당신은 전문 전공 서적 수준의 답을 하는 AI 어시스턴트입니다."),
+    "refine": loaded_system_prompts.get("refine", "당신은 전문 편집자입니다."),
+    "fact_check": loaded_system_prompts.get("fact_check", "당신은 팩트체커입니다."),
+    "refine_fact": loaded_system_prompts.get("refine_fact", "당신은 전문 편집자이자 팩트체커입니다."),
+    "debate": loaded_system_prompts.get("debate", "당신은 비판적으로 분석하는 토론 전문가입니다.")
 }
 
-# 사용자 목적별 프롬프트 설정 (profile.env에서 읽어오기)
+# 사용자 목적별 프롬프트 설정 (prompt.md에서 읽어오기, 없으면 기본값 사용)
 PURPOSE_PROMPTS = {
-    "writer": os.getenv("PURPOSE_PROMPT_WRITER", "작가의 관점에서 정돈 된 문장과 서사 구조를 중심으로 글을 작성한다."),
-    "student": os.getenv("PURPOSE_PROMPT_STUDENT", "학생의 관점에서 학술적인 접근을 기본으로, 개념을 명확히 하고 교육적 가치 중심으로 보고서를 작성한다."),
-    "reporter": os.getenv("PURPOSE_PROMPT_REPORTER", "기자의 관점에서 사실 확인과 객관적 분석에 중점을 두며, 뉴스 가치와 사회적 영향을 고려한 기사를 작성한다."),
-    "officeworker": os.getenv("PURPOSE_PROMPT_OFFICEWORKER", "회사원의 관점에서 실무적이고 효율적인 접근을 하며, 비즈니스 활용도와 실용성에 중점을 둔 보고서를 작성한다.")
+    "writer": loaded_purpose_prompts.get("writer", "작가의 관점에서 정돈 된 문장과 서사 구조를 중심으로 글을 작성한다."),
+    "student": loaded_purpose_prompts.get("student", "학생의 관점에서 학술적인 접근을 기본으로, 개념을 명확히 하고 교육적 가치 중심으로 보고서를 작성한다."),
+    "reporter": loaded_purpose_prompts.get("reporter", "기자의 관점에서 사실 확인과 객관적 분석에 중점을 두며, 뉴스 가치와 사회적 영향을 고려한 기사를 작성한다."),
+    "officeworker": loaded_purpose_prompts.get("officeworker", "회사원의 관점에서 실무적이고 효율적인 접근을 하며, 비즈니스 활용도와 실용성에 중점을 둔 보고서를 작성한다.")
 }
 
 class CowrityApp:
@@ -311,21 +366,47 @@ class CowrityApp:
         )
         self.discuss_model3_btn.pack(side=tk.LEFT, padx=2)
         
-        # Row 3: 출력 프롬프트 텍스트박스
+        # Row 3: 출력 프롬프트 텍스트박스 (리치 텍스트 지원)
         output_frame = ttk.LabelFrame(main_frame, text="출력 프롬프트", padding="5")
         output_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
         
-        self.output_text = scrolledtext.ScrolledText(
-            output_frame,
+        # 스크롤바가 있는 프레임 생성
+        text_frame = ttk.Frame(output_frame)
+        text_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        
+        # 리치 텍스트를 지원하는 Text 위젯 생성
+        self.output_text = tk.Text(
+            text_frame,
             height=40,
             width=80,
             font=("Arial", 10),
             wrap=tk.WORD,
-            state=tk.DISABLED
+            state=tk.DISABLED,
+            bg='white',
+            fg='black',
+            relief='sunken',
+            borderwidth=2
         )
+        
+        # 수직 스크롤바 추가
+        v_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.output_text.yview)
+        self.output_text.configure(yscrollcommand=v_scrollbar.set)
+        
+        # 수평 스크롤바 추가
+        h_scrollbar = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL, command=self.output_text.xview)
+        self.output_text.configure(xscrollcommand=h_scrollbar.set)
+        
+        # 위젯 배치
         self.output_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # 리치 텍스트용 태그 설정
+        self.setup_text_tags()
         
         # Row 4: 하단 정보 및 클리어 버튼
         bottom_frame = ttk.Frame(main_frame)
@@ -406,6 +487,181 @@ class CowrityApp:
         
         # 초기 포커스 설정
         self.input_text.focus_set()
+    
+    def setup_text_tags(self):
+        """리치 텍스트용 태그 설정"""
+        # 헤더 스타일 (모델명, 시간 등)
+        self.output_text.tag_configure("header", 
+                                     font=("Arial", 12, "bold"), 
+                                     foreground="#2E86AB")
+        
+        # 구분선 스타일
+        self.output_text.tag_configure("separator", 
+                                     font=("Arial", 10), 
+                                     foreground="#A23B72")
+        
+        # 성공 메시지 스타일 (✅)
+        self.output_text.tag_configure("success", 
+                                     font=("Arial", 11, "bold"), 
+                                     foreground="#059862")
+        
+        # 에러 메시지 스타일 (❌)
+        self.output_text.tag_configure("error", 
+                                     font=("Arial", 11, "bold"), 
+                                     foreground="#DC2626")
+        
+        # 경고 메시지 스타일 (⚠️)
+        self.output_text.tag_configure("warning", 
+                                     font=("Arial", 11, "bold"), 
+                                     foreground="#D97706",
+                                     background="#FEF3C7")
+        
+        # AI 응답 내용 스타일
+        self.output_text.tag_configure("content", 
+                                     font=("Arial", 10), 
+                                     foreground="#1F2937")
+        
+        # 강조 텍스트 스타일 (볼드)
+        self.output_text.tag_configure("bold", 
+                                     font=("Arial", 10, "bold"),
+                                     foreground="#1565C0")
+        
+        # 이탤릭 텍스트 스타일
+        self.output_text.tag_configure("italic", 
+                                     font=("Arial", 10, "italic"),
+                                     foreground="#424242")
+        
+        # 코드 블록 스타일
+        self.output_text.tag_configure("code", 
+                                     font=("Consolas", 9), 
+                                     background="#F3F4F6", 
+                                     foreground="#374151",
+                                     relief="solid",
+                                     borderwidth=1)
+        
+        # 인용문 스타일
+        self.output_text.tag_configure("quote", 
+                                     font=("Arial", 10, "italic"), 
+                                     foreground="#6B7280",
+                                     lmargin1=20, 
+                                     lmargin2=20,
+                                     background="#F9FAFB")
+        
+        # 제목 스타일 (H1, H2, H3 등)
+        self.output_text.tag_configure("h1", 
+                                     font=("Arial", 14, "bold"), 
+                                     foreground="#1F2937",
+                                     spacing1=10,
+                                     spacing3=5)
+        
+        self.output_text.tag_configure("h2", 
+                                     font=("Arial", 13, "bold"), 
+                                     foreground="#374151",
+                                     spacing1=8,
+                                     spacing3=4)
+        
+        self.output_text.tag_configure("h3", 
+                                     font=("Arial", 12, "bold"), 
+                                     foreground="#4B5563",
+                                     spacing1=6,
+                                     spacing3=3)
+        
+        # 링크 스타일 (클릭 가능한 URL) - 파란색 볼드체
+        self.output_text.tag_configure("link", 
+                                     font=("Arial", 10, "bold underline"), 
+                                     foreground="#0066CC")
+        
+        # 링크에 마우스 호버 스타일 - 더 진한 파란색 볼드체
+        self.output_text.tag_configure("link_hover", 
+                                     font=("Arial", 10, "bold underline"), 
+                                     foreground="#003399",
+                                     background="#EFF6FF")
+        
+        # 링크 클릭 이벤트 바인딩
+        self.output_text.tag_bind("link", "<Button-1>", self.on_link_click)
+        self.output_text.tag_bind("link", "<Enter>", self.on_link_enter)
+        self.output_text.tag_bind("link", "<Leave>", self.on_link_leave)
+        
+        # 링크 위에서 커서 변경
+        self.output_text.configure(cursor="arrow")
+        
+        # 리스트 아이템 스타일
+        self.output_text.tag_configure("list_item", 
+                                     font=("Arial", 10), 
+                                     foreground="#1F2937",
+                                     lmargin1=20,
+                                     lmargin2=30)
+    
+    def on_link_click(self, event):
+        """링크 클릭 이벤트 처리"""
+        try:
+            # 클릭된 위치의 텍스트 인덱스 구하기
+            index = self.output_text.index(f"@{event.x},{event.y}")
+            
+            # 해당 위치의 태그 확인
+            tags = self.output_text.tag_names(index)
+            
+            if "link" in tags:
+                # 링크 태그의 범위 구하기
+                tag_ranges = self.output_text.tag_ranges("link")
+                
+                # 클릭된 위치가 포함된 링크 찾기
+                for i in range(0, len(tag_ranges), 2):
+                    start_index = tag_ranges[i]
+                    end_index = tag_ranges[i + 1]
+                    
+                    if (self.output_text.compare(start_index, "<=", index) and 
+                        self.output_text.compare(index, "<", end_index)):
+                        
+                        # 해당 범위의 텍스트(URL) 추출
+                        url = self.output_text.get(start_index, end_index)
+                        
+                        # URL 정제 (공백 제거)
+                        url = url.strip()
+                        
+                        # http:// 또는 https://가 없으면 추가
+                        if not url.startswith(('http://', 'https://')):
+                            if url.startswith('www.'):
+                                url = 'https://' + url
+                            elif '.' in url:  # 도메인으로 보이는 경우
+                                url = 'https://' + url
+                        
+                        # 브라우저에서 URL 열기
+                        webbrowser.open(url)
+                        print(f"링크 열기: {url}")
+                        break
+                        
+        except Exception as e:
+            print(f"링크 클릭 오류: {str(e)}")
+    
+    def on_link_enter(self, event):
+        """링크에 마우스가 올라갔을 때"""
+        self.output_text.configure(cursor="hand2")
+        
+        # 호버 효과 적용
+        index = self.output_text.index(f"@{event.x},{event.y}")
+        tags = self.output_text.tag_names(index)
+        
+        if "link" in tags:
+            # 현재 링크의 범위 찾기
+            tag_ranges = self.output_text.tag_ranges("link")
+            for i in range(0, len(tag_ranges), 2):
+                start_index = tag_ranges[i]
+                end_index = tag_ranges[i + 1]
+                
+                if (self.output_text.compare(start_index, "<=", index) and 
+                    self.output_text.compare(index, "<", end_index)):
+                    
+                    # 해당 범위에 호버 태그 추가
+                    self.output_text.tag_add("link_hover", start_index, end_index)
+                    break
+    
+    def on_link_leave(self, event):
+        """링크에서 마우스가 벗어났을 때"""
+        self.output_text.configure(cursor="arrow")
+        
+        # 모든 호버 태그 제거
+        self.output_text.tag_remove("link_hover", "1.0", tk.END)
     
     def clear_input(self):
         """입력 프롬프트 클리어"""
@@ -716,7 +972,7 @@ class CowrityApp:
         elif model_num == 3:
             return self.model3_var.get()
 
-    def send_to_model(self, model_num, request_type="direct"):
+    def send_to_model(self, model_num, request_type="request"):
         """선택된 모델에 프롬프트 내용을 전송"""
         prompt = self.input_text.get(1.0, tk.END).strip()
         
@@ -861,7 +1117,7 @@ class CowrityApp:
             error_msg = f"❌ 시스템 오류가 발생했습니다: {str(e)}"
             self.root.after(0, self.update_output, model_num, model_name, prompt, error_msg, task_type, True)
     
-    def claude_api(self, prompt, task_type="direct", model_name="Claude Sonnet 4(일반)", purpose_prompt=PURPOSE_PROMPTS["writer"]):
+    def claude_api(self, prompt, task_type="request", model_name="Claude Sonnet 4(일반)", purpose_prompt=PURPOSE_PROMPTS["writer"]):
         """Claude Opus 4 언어 모델 처리 함수 (스트리밍 방식)"""
         try:
             # Claude API 설정 (글로벌 변수 사용)
@@ -869,7 +1125,7 @@ class CowrityApp:
             client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
             
             # 글로벌 시스템 프롬프트 사용
-            system_prompt = SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS["direct"])
+            system_prompt = SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS["request"])
 
             #모델 이름에 따라서 모델을 선택한다.
             if model_name == "Claude Opus 4(정교함/비쌈)":
@@ -1011,7 +1267,7 @@ class CowrityApp:
                 system_prompt = f"{SYSTEM_PROMPTS['refine_fact']} {purpose_prompt}"
             else:
                 # 다른 task_type들은 기본 PURPOSE_PROMPTS와 함께 적용
-                system_prompt = f"{SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS['direct'])} {purpose_prompt}"
+                system_prompt = f"{SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS['request'])} {purpose_prompt}"
             
             # 요청 헤더
             headers = {
@@ -1211,12 +1467,12 @@ class CowrityApp:
             # OpenAI API 설정 (글로벌 변수 사용)
             #모델 이름에 따라서 모델을 선택한다.
             if model_name == "GPT-4.1(일반)":
-                model_selected = "gpt-4-1106-preview"
+                model_selected = "gpt-4o"
             elif model_name == "OpenAI o3(추론모델)":
                 model_selected = "o3-mini"
 
             # 글로벌 시스템 프롬프트 사용
-            system_prompt = SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS[task_type])
+            system_prompt = SYSTEM_PROMPTS.get(task_type, SYSTEM_PROMPTS["direct"])
             
             # debate의 경우 사용자 목적별 프롬프트 추가
             if task_type == "debate":
@@ -1245,27 +1501,28 @@ class CowrityApp:
                 system_prompt = f"{SYSTEM_PROMPTS['fact_check']} {purpose_prompt}"
             elif task_type == "refine_fact":
                 # 문장 다듬기 + 팩트 체크 프롬프트
-                system_prompt = f"{SYSTEM_PROMPTS['refine_fact']} {purpose_prompt}" 
+                system_prompt = f"{SYSTEM_PROMPTS['refine_fact']} {purpose_prompt}"
             
             final_prompt = prompt
             
             full_response = ""
             
             # OpenAI API 클라이언트 초기화
-            openai = OpenAI(api_key=OPENAI_API_KEY)
-
+            client = OpenAI(api_key=OPENAI_API_KEY)
 
             # OpenAI API 호출
-            response = openai.responses.create(
+            response = client.chat.completions.create(
                 model=model_selected,
-                input = [
-                    {"role": "user", "content": final_prompt},
-                    {"role": "system", "content": system_prompt}
-                ]
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": final_prompt}
+                ],
+                max_tokens=4000,
+                temperature=0.7
             )
 
             # 응답 텍스트 추출
-            content = response.output_text
+            content = response.choices[0].message.content
             # 최종 응답 구성
             full_response = content
             success_message = f"✅ OpenAI 응답 완료\n\n{full_response}"
@@ -1276,21 +1533,29 @@ class CowrityApp:
             
             return success_message
         
-        except openai.error.APIConnectionError:
-            error_msg = "❌ 네트워크 연결 오류: OpenAI API에 연결할 수 없습니다. 인터넷 연결을 확인해주세요."
+        except Exception as e:
+            error_msg = f"❌ OpenAI API 오류: {str(e)}"
             return error_msg
-        except openai.error.RateLimitError:
-            error_msg = "❌ API 사용량 한도 초과: 잠시 후 다시 시도해주세요."
-            return error_msg    
-        
 
 
 
     def update_streaming_output(self, text_chunk):
-        """스트리밍 텍스트 실시간 업데이트 (선택적 기능)"""
+        """스트리밍 텍스트 실시간 업데이트 (리치 텍스트 지원)"""
         try:
             self.output_text.configure(state=tk.NORMAL)
-            self.output_text.insert(tk.END, text_chunk)
+            
+            # 스트리밍 텍스트에도 기본적인 포맷팅 적용
+            if text_chunk.startswith('✅'):
+                self.output_text.insert(tk.END, text_chunk, "success")
+            elif text_chunk.startswith('❌'):
+                self.output_text.insert(tk.END, text_chunk, "error")
+            elif text_chunk.startswith('⚠️'):
+                self.output_text.insert(tk.END, text_chunk, "warning")
+            elif '**' in text_chunk and text_chunk.count('**') >= 2:
+                self.insert_bold_text(text_chunk.replace('\n', ''))
+            else:
+                self.output_text.insert(tk.END, text_chunk, "content")
+                
             self.output_text.see(tk.END)
             self.output_text.configure(state=tk.DISABLED)
         except Exception as e:
@@ -1299,14 +1564,15 @@ class CowrityApp:
     
     
     def update_output(self, model_num, model_name, prompt, response, task_type, is_error=False):
-        """출력 텍스트 업데이트"""
+        """출력 텍스트 업데이트 (리치 텍스트 지원)"""
         self.output_text.configure(state=tk.NORMAL)
         
         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
         
         # 구분선 추가 (첫 번째 메시지가 아닌 경우)
         if self.output_text.get(1.0, tk.END).strip():
-            self.output_text.insert(tk.END, "\n" + "="*80 + "\n\n")
+            separator = "\n" + "="*80 + "\n\n"
+            self.output_text.insert(tk.END, separator, "separator")
         
         # 작업 정보 표시
         task_names = {
@@ -1318,15 +1584,25 @@ class CowrityApp:
             "debate": "토론"
         }
         
-        self.output_text.insert(tk.END, f"[{current_time}] {model_num}차 모델({model_name}) - {task_names[task_type]}\n")
-        self.output_text.insert(tk.END, "-" * 80 + "\n\n")
+        # 헤더 정보 삽입 (태그 적용)
+        header_text = f"[{current_time}] {model_num}차 모델({model_name}) - {task_names[task_type]}\n"
+        self.output_text.insert(tk.END, header_text, "header")
         
+        # 구분선
+        divider = "-" * 80 + "\n\n"
+        self.output_text.insert(tk.END, divider, "separator")
+        
+        # 응답 내용 처리
         if is_error:
-            self.output_text.insert(tk.END, f"오류: {response}\n\n")
+            self.output_text.insert(tk.END, "오류: ", "error")
+            self.output_text.insert(tk.END, response + "\n\n", "content")
         else:
-            self.output_text.insert(tk.END, f"{response}\n\n")
+            # 응답 내용을 분석하여 태그 적용
+            self.insert_formatted_response(response)
         
-        self.output_text.insert(tk.END, "\n" + "="*80 + "\n\n")
+        # 마지막 구분선
+        final_separator = "\n" + "="*80 + "\n\n"
+        self.output_text.insert(tk.END, final_separator, "separator")
 
         # 자동 스크롤
         self.output_text.see(tk.END)
@@ -1334,6 +1610,126 @@ class CowrityApp:
         
         # 상태 복원
         self.update_status("준비", "green", False)
+    
+    def insert_formatted_response(self, response):
+        """응답 내용을 포맷팅하여 삽입"""
+        lines = response.split('\n')
+        in_code_block = False
+        
+        for line in lines:
+            # 코드 블록 시작/종료 체크
+            if line.strip().startswith('```'):
+                in_code_block = not in_code_block
+                self.output_text.insert(tk.END, line + '\n', "code")
+                continue
+            
+            # 코드 블록 내부인 경우
+            if in_code_block:
+                self.output_text.insert(tk.END, line + '\n', "code")
+                continue
+            
+            # 성공 메시지 체크
+            if line.startswith('✅'):
+                self.insert_text_with_links(line, "success")
+            # 에러 메시지 체크
+            elif line.startswith('❌'):
+                self.insert_text_with_links(line, "error")
+            # 경고 메시지 체크
+            elif line.startswith('⚠️'):
+                self.insert_text_with_links(line, "warning")
+            # 헤더 체크 (# 개수에 따라 다른 스타일)
+            elif line.strip().startswith('###'):
+                self.insert_text_with_links(line, "h3")
+            elif line.strip().startswith('##'):
+                self.insert_text_with_links(line, "h2")
+            elif line.strip().startswith('#'):
+                self.insert_text_with_links(line, "h1")
+            # 인용문 체크 (>로 시작하는 줄)
+            elif line.strip().startswith('>'):
+                self.insert_text_with_links(line, "quote")
+            # 리스트 아이템 체크 (-, *, 1. 등으로 시작)
+            elif re.match(r'^\s*[-*]\s+', line) or re.match(r'^\s*\d+\.\s+', line):
+                self.insert_text_with_links(line, "list_item")
+            # 볼드 텍스트 처리 (**텍스트**)
+            elif '**' in line:
+                self.insert_bold_text(line)
+            # 이탤릭 텍스트 처리 (*텍스트*)
+            elif '*' in line and '**' not in line:
+                self.insert_italic_text(line)
+            # 일반 텍스트 (URL 포함 여부 확인)
+            else:
+                self.insert_text_with_links(line)
+    
+    def insert_bold_text(self, line):
+        """볼드 텍스트가 포함된 라인 처리 (URL도 고려)"""
+        parts = re.split(r'\*\*(.*?)\*\*', line)
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # 일반 텍스트 (URL 확인)
+                self.insert_text_with_links(part, "content", newline=False)
+            else:
+                # 볼드 텍스트
+                self.insert_text_with_links(part, "bold", newline=False)
+        self.output_text.insert(tk.END, '\n', "content")
+    
+    def insert_italic_text(self, line):
+        """이탤릭 텍스트가 포함된 라인 처리 (URL도 고려)"""
+        parts = re.split(r'\*(.*?)\*', line)
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # 일반 텍스트 (URL 확인)
+                self.insert_text_with_links(part, "content", newline=False)
+            else:
+                # 이탤릭 텍스트
+                self.insert_text_with_links(part, "italic", newline=False)
+        self.output_text.insert(tk.END, '\n', "content")
+    
+    def insert_text_with_links(self, text, base_tag="content", newline=True):
+        """텍스트에서 URL을 찾아 링크로 변환"""
+        # 단순하고 확실한 URL 패턴 정의
+        url_pattern = r'(https?://[^\s\)]+)'
+        
+        # URL을 찾아서 분할
+        parts = re.split(f'({url_pattern})', text)
+        
+        # 중복된 URL 제거: parts 배열에서 동일한 URL이 있으면 뒤에 오는 것을 제거
+        seen_urls = set()
+        filtered_parts = []
+        
+        for part in parts:
+            if re.match(url_pattern, part):
+                # URL인 경우: 이미 본 URL인지 확인
+                cleaned_url = part.rstrip('.,;:!?)')
+               
+                # 두 번째 https:// 이후 모든 내용 제거
+                if cleaned_url.count('https://') > 1:
+                    first_https = cleaned_url.find('https://')
+                    second_https = cleaned_url.find('https://', first_https + 8)
+                    if second_https != -1:
+                        cleaned_url = cleaned_url[:second_https].rstrip()
+                
+                
+                # 중복 확인: 이미 본 URL이면 스킵
+                if cleaned_url not in seen_urls:
+                    seen_urls.add(cleaned_url)
+                    filtered_parts.append(cleaned_url)
+                # 중복된 URL은 건너뛰기
+            else:
+                # 일반 텍스트는 항상 추가
+                filtered_parts.append(part)
+        
+        # 필터링된 parts로 출력
+        for part in filtered_parts:
+            if re.match(url_pattern, part):
+                # URL인 경우 링크 태그 적용
+                self.output_text.insert(tk.END, part, ("link", base_tag))
+            else:
+                # 일반 텍스트
+                if part:  # 빈 문자열이 아닌 경우만
+                    self.output_text.insert(tk.END, part, base_tag)
+        
+        if newline:
+            self.output_text.insert(tk.END, '\n', base_tag)
 
     def update_status(self, text, color, show_progress):
         """상태 업데이트"""
